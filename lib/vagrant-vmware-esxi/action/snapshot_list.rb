@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -30,29 +30,18 @@ module VagrantPlugins
            env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
                                 message: 'Cannot snapshot_list in this state')
           else
+            r = ESXiConnection.exec!(env,
+                "vim-cmd vmsvc/snapshot.get #{machine.id} 2>&1 | "\
+                "grep 'Snapshot Name'|sed 's/.*Snapshot Name        : //g'")
 
-            Net::SSH.start(config.esxi_hostname, config.esxi_username,
-              password:                   config.esxi_password,
-              port:                       config.esxi_hostport,
-              keys:                       config.local_private_keys,
-              timeout:                    20,
-              number_of_password_prompts: 0,
-              non_interactive:            true
-            ) do |ssh|
-
-              r = ssh.exec!(
-                  "vim-cmd vmsvc/snapshot.get #{machine.id} 2>&1 | "\
-                  "grep 'Snapshot Name'|sed 's/.*Snapshot Name        : //g'")
-
-              allsnapshots = r
-              if r.exitstatus != 0
-                raise Errors::ESXiError,
-                      message: "Unable to list snapshots:\n"\
-                               "  #{allsnapshots}\n#{r.stderr}"
-              end
-
-              env[:machine_snapshot_list] = allsnapshots.split("\n")
+            allsnapshots = r
+            if r.exitstatus != 0
+              raise Errors::ESXiError,
+                    message: "Unable to list snapshots:\n"\
+                             "  #{allsnapshots}\n#{r.stderr}"
             end
+
+            env[:machine_snapshot_list] = allsnapshots.split("\n")
           end
         end
       end

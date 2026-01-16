@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -37,29 +37,16 @@ module VagrantPlugins
             env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
                                  message: 'Attempting to resume')
 
-            #
-            Net::SSH.start(config.esxi_hostname, config.esxi_username,
-              password:                   config.esxi_password,
-              port:                       config.esxi_hostport,
-              keys:                       config.local_private_keys,
-              timeout:                    20,
-              number_of_password_prompts: 0,
-              non_interactive:            true,
-              keepalive:                  true,
-              keepalive_interval:         30
-            ) do |ssh|
+            r = ESXiConnection.exec!(env, "vim-cmd vmsvc/power.on #{machine.id}")
+            config.saved_ipaddress = nil
 
-              r = ssh.exec!("vim-cmd vmsvc/power.on #{machine.id}")
-              config.saved_ipaddress = nil
-
-              if r.exitstatus != 0
-                raise Errors::ESXiError,
-                      message: "Unable to resume the VM:\n"\
-                               "  #{r}"
-              end
-              env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
-                                   message: 'VM has been resumed...')
+            if r.exitstatus != 0
+              raise Errors::ESXiError,
+                    message: "Unable to resume the VM:\n"\
+                             "  #{r}"
             end
+            env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                 message: 'VM has been resumed...')
           else
             raise Errors::ESXiError, message: 'Unknown state to resume...'
           end

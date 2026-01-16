@@ -1,6 +1,7 @@
 require 'log4r'
 require 'net/ssh'
 require 'io/console'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -150,37 +151,28 @@ module VagrantPlugins
                          "#{config.local_private_keys}")
 
             #
-            #  Test ESXi host connectivity
+            #  Test ESXi host connectivity and establish persistent connection
             #
             begin
               puts "RUBY_PLATFORM: #{RUBY_PLATFORM}" if config.debug =~ %r{true}i
               puts "Testing esxi connectivity" if config.debug =~ %r{ip}i
               puts "esxi_ssh_keys: #{config.local_private_keys}" if config.debug =~ %r{password}i
-              Net::SSH.start(config.esxi_hostname, config.esxi_username,
-                password:                   config.esxi_password,
-                port:                       config.esxi_hostport,
-                keys:                       config.local_private_keys,
-                timeout:                    20,
-                number_of_password_prompts: 0,
-                non_interactive:            true
-              ) do |ssh|
 
-                esxi_version = ssh.exec!('vmware -v')
-                ssh.close
+              # Test SSH connectivity by executing a simple command
+              esxi_version = ESXiConnection.exec!(env, 'vmware -v')
 
-                @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::set_esxi_password')
-                if (config.debug =~ %r{true}i) && $showVersionFlag.nil?
-                  $showVersionFlag = true
-                  env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
-                                       message: "ESXi version    : #{esxi_version}")
-                end
-                if esxi_version !~ %r{^vmware esxi}i
-                  @logger.info('vagrant-vmware-esxi, set_esxi_password: '\
-                               "ESXi version: #{esxi_version}")
-                  raise Errors::ESXiError,
-                        message: 'Unable to connect to ESXi host!'\
-                                "Error: #{esxi_version}"
-                end
+              @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::set_esxi_password')
+              if (config.debug =~ %r{true}i) && $showVersionFlag.nil?
+                $showVersionFlag = true
+                env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                     message: "ESXi version    : #{esxi_version}")
+              end
+              if esxi_version !~ %r{^vmware esxi}i
+                @logger.info('vagrant-vmware-esxi, set_esxi_password: '\
+                             "ESXi version: #{esxi_version}")
+                raise Errors::ESXiError,
+                      message: 'Unable to connect to ESXi host!'\
+                              "Error: #{esxi_version}"
               end
             rescue
               if password_type == 'prompt'

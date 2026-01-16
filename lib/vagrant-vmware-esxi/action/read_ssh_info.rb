@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -40,55 +40,48 @@ module VagrantPlugins
 
           if config.saved_ipaddress.nil? or config.local_use_ip_cache == 'False'
 
-            #  Figure out vm_ipaddress
-            Net::SSH.start(config.esxi_hostname, config.esxi_username,
-              password:                   config.esxi_password,
-              port:                       config.esxi_hostport,
-              keys:                       config.local_private_keys,
-              timeout:                    20,
-              number_of_password_prompts: 0,
-              non_interactive:            true
-            ) do |ssh|
+            @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::'\
+                                        'read_ssh_info-net_ssh')
 
-              @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::'\
-                                          'read_ssh_info-net_ssh')
+            #  ugly, but it works...
+            #    Try to get first interface.  This is the prefered method
+            #    when you have multiple network interfaces
+            ssh_execute_cmd = "vim-cmd vmsvc/get.guest #{machine.id} 2>/dev/null |"
+            ssh_execute_cmd << 'sed \'1!G;h;$!d\' |awk \'/deviceConfigId = 4000/,/ipAddress/\' |'
+            ssh_execute_cmd << 'grep -oE "((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])" |tail -1'
+            r = ESXiConnection.exec!(env, ssh_execute_cmd)
+            ipaddress = r.strip
+            @logger.debug("read_ssh_info: IP detection method 1 result: '#{ipaddress}'")
 
-              #  ugly, but it works...
-              #    Try to get first interface.  This is the prefered method
-              #    when you have multiple network interfaces
-              ssh_execute_cmd = "vim-cmd vmsvc/get.guest #{machine.id} 2>/dev/null |"
-              ssh_execute_cmd << 'sed \'1!G;h;$!d\' |awk \'/deviceConfigId = 4000/,/ipAddress/\' |'
-              ssh_execute_cmd << 'grep -oE "((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])" |tail -1'
-              r = ssh.exec!(ssh_execute_cmd)
-              ipaddress = r.strip
-
-              #  Some OS's don't like above method, so use IP from summary (after 120 seconds uptime)
-              r2 = ''
-              if r.length == 0
-                ssh_execute_cmd = "vim-cmd vmsvc/get.summary #{machine.id} 2>/dev/null |"
-                ssh_execute_cmd << 'grep "uptimeSeconds ="|sed "s/^.*= //g"|sed s/,//g'
-                uptime = ssh.exec!(ssh_execute_cmd)
-                if uptime.to_i > 120
-                  puts "Get IP alt method, uptime: #{uptime.to_i}" if config.debug =~ %r{ip}i
-                  ssh_execute_cmd = "vim-cmd vmsvc/get.guest #{machine.id} 2>/dev/null |"
-                  ssh_execute_cmd << 'grep "^   ipAddress = "|head -1|'
-                  ssh_execute_cmd << 'grep -oE "((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])"'
-                  r2 = ssh.exec!(ssh_execute_cmd)
-                  ipaddress = r2.strip
-                end
+            #  Some OS's don't like above method, so use IP from summary (after 120 seconds uptime)
+            r2 = ''
+            if r.length == 0
+              ssh_execute_cmd = "vim-cmd vmsvc/get.summary #{machine.id} 2>/dev/null |"
+              ssh_execute_cmd << 'grep "uptimeSeconds ="|sed "s/^.*= //g"|sed s/,//g'
+              uptime = ESXiConnection.exec!(env, ssh_execute_cmd)
+              if uptime.to_i > 120
+                puts "Get IP alt method, uptime: #{uptime.to_i}" if config.debug =~ %r{ip}i
+                ssh_execute_cmd = "vim-cmd vmsvc/get.guest #{machine.id} 2>/dev/null |"
+                ssh_execute_cmd << 'grep "^   ipAddress = "|head -1|'
+                ssh_execute_cmd << 'grep -oE "((1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])\.){3}(1?[0-9][0-9]?|2[0-4][0-9]|25[0-5])"'
+                r2 = ESXiConnection.exec!(env, ssh_execute_cmd)
+                ipaddress = r2.strip
+                @logger.debug("DEBUG read_ssh_info: IP detection method 2 result: '#{ipaddress}'")
               end
-
-              puts "ip1 (pri):#{r.strip} ip2 (alt):#{r2.strip}" if config.debug =~ %r{ip}i
-
-              return nil if (ipaddress == '')
-
-              config.saved_ipaddress = ipaddress
-
-              return {
-                host: ipaddress,
-                port: 22
-              }
+            else
+              @logger.debug("DEBUG read_ssh_info: Uptime #{uptime.to_i}s < 120s, skipping alt method")
             end
+
+            puts "ip1 (pri):#{r.strip} ip2 (alt):#{r2.strip}" if config.debug =~ %r{ip}i
+
+            return nil if (ipaddress == '')
+
+            config.saved_ipaddress = ipaddress
+
+            return {
+              host: ipaddress,
+              port: 22
+            }
           else
             puts "Using cached guest IP address" if config.debug =~ %r{ip}i
             ipaddress = config.saved_ipaddress

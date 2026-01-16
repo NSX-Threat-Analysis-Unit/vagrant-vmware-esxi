@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -121,23 +121,11 @@ module VagrantPlugins
             puts "source_vmx_contents: #{source_vmx_contents}" if config.debug =~ %r{vmx}i
           end
 
-          #
-          #  Open the network connection
-          #
-          Net::SSH.start( config.esxi_hostname, config.esxi_username,
-            password:                   config.esxi_password,
-            port:                       config.esxi_hostport,
-            keys:                       config.local_private_keys,
-            timeout:                    20,
-            number_of_password_prompts: 0,
-            non_interactive:            true
-          ) do |ssh|
-
-            @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::createvm-ssh')
+          @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::createvm-ssh')
 
             #
             #  Figure out DataStore
-            r = ssh.exec!(
+            r = ESXiConnection.exec!(env,
                     'esxcli storage filesystem list | grep "/vmfs/volumes/.*[VMFS|NFS]" | '\
                     "awk '{printf $NF\",\" ; for(i=2;i<=NF-5;++i)printf $i\"\"FS ; printf \"\\n\"}' | "\
                     "sort -n | awk -F',' '{print $2}' | sed 's/ $//g'")
@@ -191,7 +179,7 @@ module VagrantPlugins
                 if store.is_a? Hash
                   store_size = store[:size].to_i
                   guest_disk_datastore = store[:datastore].nil? ? @guestvm_dsname : store[:datastore]
-                  r = ssh.exec!("test -d /vmfs/volumes/#{guest_disk_datastore}")
+                  r = ESXiConnection.exec!(env, "test -d /vmfs/volumes/#{guest_disk_datastore}")
                   if (r.exitstatus != 0) || (guest_disk_datastore.length < 1)
                     env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
                                          message: 'WARNING         : '\
@@ -222,7 +210,7 @@ module VagrantPlugins
             #
             #  Figure out network
             #
-            r = ssh.exec!(
+            r = ESXiConnection.exec!(env,
                     'esxcli network vswitch standard list |'\
                     'grep Portgroups | sed "s/^   Portgroups: //g" |'\
                     'sed "s/,./\n/g"')
@@ -290,7 +278,6 @@ module VagrantPlugins
               networkID += 1
               break if networkID >= 10
             end
-          end
 
           @logger.info('vagrant-vmware-esxi, createvm: '\
                        "esxi_virtual_network: #{@guestvm_network}")
@@ -594,18 +581,9 @@ module VagrantPlugins
           end
 
           #
-          #  Re-open the network connection to get VMID and do adjustments
-          #  to vmx file.
+          #  Get VMID and do adjustments to vmx file.
           #
-          Net::SSH.start(config.esxi_hostname, config.esxi_username,
-            password:                   config.esxi_password,
-            port:                       config.esxi_hostport,
-            keys:                       config.local_private_keys,
-            timeout:                    20,
-            number_of_password_prompts: 0,
-            non_interactive:            true
-          ) do |ssh|
-            r = ssh.exec!(
+          r = ESXiConnection.exec!(env,
                     'vim-cmd vmsvc/getallvms 2>/dev/null | sort -n |'\
                     "grep \"[0-9] * #{desired_guest_name} .*#{desired_guest_name}\"|"\
                     "awk '{print $1}'|tail -1")
@@ -620,13 +598,13 @@ module VagrantPlugins
                                  message: "VMID            : #{env[:machine].id}")
 
             #  Destination (on esxi host) vmx file
-            dst_vmx = ssh.exec!("vim-cmd vmsvc/get.config #{env[:machine].id} |\
+            dst_vmx = ESXiConnection.exec!(env, "vim-cmd vmsvc/get.config #{env[:machine].id} |\
                     grep vmPathName|awk '{print $NF}'|sed 's/[\"|,]//g'")
 
-            dst_vmx_ds = ssh.exec!("vim-cmd vmsvc/get.config #{env[:machine].id} |"\
+            dst_vmx_ds = ESXiConnection.exec!(env, "vim-cmd vmsvc/get.config #{env[:machine].id} |"\
                     'grep vmPathName|grep -oE "\[.*\]"')
 
-            dst_vmx_dir = ssh.exec!("vim-cmd vmsvc/get.config #{env[:machine].id} |\
+            dst_vmx_dir = ESXiConnection.exec!(env, "vim-cmd vmsvc/get.config #{env[:machine].id} |\
                     grep vmPathName|awk '{print $NF}'|awk -F'\/' '{print $1}'").strip
 
 
@@ -638,7 +616,7 @@ module VagrantPlugins
 
             #  Extend boot disk if required
             if config.guest_boot_disk_size.is_a? Integer
-              boot_disk = ssh.exec!("vim-cmd vmsvc/device.getdevices #{env[:machine].id} |"\
+              boot_disk = ESXiConnection.exec!(env, "vim-cmd vmsvc/device.getdevices #{env[:machine].id} |"\
                                      'grep -A10 "key = 2000"|grep fileName|head -1|grep -o "\/.*.vmdk"')
 
               puts "Boot Disk: #{boot_disk}" if config.debug =~ %r{true}i
@@ -649,7 +627,7 @@ module VagrantPlugins
               end
               cmd = "/bin/vmkfstools -X #{config.guest_boot_disk_size}G \"#{esxi_guest_dir}#{boot_disk.strip}\""
               puts "cmd: #{cmd}" if config.debug =~ %r{true}i
-              r = ssh.exec!(cmd)
+              r = ESXiConnection.exec!(env, cmd)
               if r.exitstatus != 0
                 if config.local_failonwarning == 'True'
                   raise Errors::ESXiError,
@@ -684,7 +662,7 @@ module VagrantPlugins
                   env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
                                        message: "Creating Storage: disk_#{index}.vmdk (#{store_size}GB)")
                   #  Figure out what SCSI slots are used.
-                  r = ssh.exec!("vim-cmd vmsvc/device.getdevices #{machine.id}|"\
+                  r = ESXiConnection.exec!(env, "vim-cmd vmsvc/device.getdevices #{machine.id}|"\
                     "grep -A 30 vim.vm.device.VirtualDisk|"\
                     "grep -e controllerKey -e unitNumber|grep -A 1 'controllerKey = 1000,'|"\
                     "grep unitNumber|awk '{print $3}'|sed 's/,//g'")
@@ -706,14 +684,14 @@ module VagrantPlugins
                             "-d #{guest_disk_type} #{guest_disk_folder}/disk_#{index}.vmdk"
 
                       puts "cmd: #{cmd}" if config.debug =~ %r{true}i
-                      r = ssh.exec!(cmd)
+                      r = ESXiConnection.exec!(env, cmd)
                       if r.exitstatus != 0
                         raise Errors::ESXiError,
                               message: "Unable to create guest storage (vmkfstools failed):\n"\
                                        "  #{r}"\
                                        '  Review ESXi logs for additional information!'
                       end
-                      r = ssh.exec!("vim-cmd vmsvc/device.diskaddexisting #{env[:machine].id} "\
+                      r = ESXiConnection.exec!(env, "vim-cmd vmsvc/device.diskaddexisting #{env[:machine].id} "\
                         "#{guest_disk_folder}/disk_#{index}.vmdk 0 #{slot}")
                       if r.exitstatus != 0
                         raise Errors::ESXiError,
@@ -729,7 +707,7 @@ module VagrantPlugins
             end
 
             #  Get vmx file in memory
-            esxi_orig_vmx_file = ssh.exec!("cat #{dst_vmx_file} 2>/dev/null")
+            esxi_orig_vmx_file = ESXiConnection.exec!(env, "cat #{dst_vmx_file} 2>/dev/null")
 
             puts "orig vmx: #{esxi_orig_vmx_file}\n\n" if config.debug =~ %r{vmx}i
 
@@ -817,19 +795,23 @@ module VagrantPlugins
               puts "new vmx: #{new_vmx_contents}"
               puts "\n\n"
             end
-            r = ''
-            ssh.open_channel do |channel|
-              channel.exec("cat >#{dst_vmx_file}") do |ch, success|
-                raise Errors::ESXiError,
-                      message: "Unable to update vmx file.\n"\
-                               "  #{r}" unless success
-                channel.send_data(new_vmx_contents)
-                channel.eof!
-              end
-            end
-            ssh.loop
 
-            r = ssh.exec!("vim-cmd vmsvc/reload #{env[:machine].id}")
+            # Use with_session for the channel operation since it needs direct SSH access
+            ESXiConnection.with_session(env) do |ssh|
+              r = ''
+              ssh.open_channel do |channel|
+                channel.exec("cat >#{dst_vmx_file}") do |ch, success|
+                  raise Errors::ESXiError,
+                        message: "Unable to update vmx file.\n"\
+                                 "  #{r}" unless success
+                  channel.send_data(new_vmx_contents)
+                  channel.eof!
+                end
+              end
+              ssh.loop
+            end
+
+            r = ESXiConnection.exec!(env, "vim-cmd vmsvc/reload #{env[:machine].id}")
             vmid = r
             if r.exitstatus != 0
               raise Errors::ESXiError,
@@ -838,14 +820,14 @@ module VagrantPlugins
 
             if !config.guest_autostart.nil?
               if config.guest_autostart.casecmp('true') == 0
-                startOrder = ssh.exec!('vim-cmd hostsvc/autostartmanager/get_autostartseq |grep startOrder |awk -F"=" "{print $2}" | sort -n |tail -1 |grep -o "[0-9]*"').to_i + 1
-                startDelay = ssh.exec!('vim-cmd hostsvc/autostartmanager/get_defaults |grep startDelay |grep -o "[0-9]*"').to_i
-                stopDelay = ssh.exec!('vim-cmd hostsvc/autostartmanager/get_defaults |grep stopDelay |grep -o "[0-9]*"').to_i
+                startOrder = ESXiConnection.exec!(env, 'vim-cmd hostsvc/autostartmanager/get_autostartseq |grep startOrder |awk -F"=" "{print $2}" | sort -n |tail -1 |grep -o "[0-9]*"').to_i + 1
+                startDelay = ESXiConnection.exec!(env, 'vim-cmd hostsvc/autostartmanager/get_defaults |grep startDelay |grep -o "[0-9]*"').to_i
+                stopDelay = ESXiConnection.exec!(env, 'vim-cmd hostsvc/autostartmanager/get_defaults |grep stopDelay |grep -o "[0-9]*"').to_i
 
                 cmd = "vim-cmd hostsvc/autostartmanager/update_autostartentry "\
                       "#{env[:machine].id} PowerOn #{startDelay} #{startOrder} systemDefault #{stopDelay} systemDefault"
                 puts "cmd: #{cmd}"
-                r = ssh.exec!(cmd)
+                r = ESXiConnection.exec!(env, cmd)
                 if r.exitstatus != 0
                   raise Errors::ESXiError,
                         message: "Unable to set autostart."
@@ -854,7 +836,6 @@ module VagrantPlugins
             end
 
             # Done
-          end
         end
       end
     end

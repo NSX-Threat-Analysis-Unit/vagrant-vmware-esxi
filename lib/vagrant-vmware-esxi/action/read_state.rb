@@ -1,6 +1,6 @@
 require 'log4r'
-require 'net/ssh'
 require 'socket'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -9,6 +9,7 @@ module VagrantPlugins
       # `:machine_state_id` key in the environment.
       class ReadState
         @@nfs_valid_ids = []
+
         def initialize(app, env)
           @app    = app
           @logger = Log4r::Logger.new('vagrant_vmware_esxi::action::read_state')
@@ -81,39 +82,27 @@ module VagrantPlugins
           @logger.info("vagrant-vmware-esxi, read_state: machine id: #{machine.id}")
           @logger.info("vagrant-vmware-esxi, read_state: current state: #{env[:machine_state]}")
 
-          Net::SSH.start(config.esxi_hostname, config.esxi_username,
-            password:                   config.esxi_password,
-            port:                       config.esxi_hostport,
-            keys:                       config.local_private_keys,
-            timeout:                    20,
-            number_of_password_prompts: 0,
-            non_interactive:            true
-          ) do |ssh|
+          r = ESXiConnection.exec!(env, "vim-cmd vmsvc/power.getstate #{machine.id} || return 254")
+          power_status = r
 
-            r = ssh.exec!("vim-cmd vmsvc/power.getstate #{machine.id} || return 254")
-            power_status = r
+          return :not_created if r.exitstatus == 254
 
-            return :not_created if r.exitstatus == 254
-
-            if power_status == "" or r.exitstatus != 0
-              raise Errors::ESXiError,
-                    message: 'Unable to get VM Power State!'
-            end
-
-            if (power_status.include? "Powered on") && !env[:machine].ssh_info.nil?
-              return :running
-            elsif power_status.include? "Powered on"
-              return :powered_on
-            elsif power_status.include? "Powered off"
-              return :powered_off
-            elsif power_status.include? "Suspended"
-              return :suspended
-            end
-
-            return nil
+          if power_status == "" or r.exitstatus != 0
+            raise Errors::ESXiError,
+                  message: 'Unable to get VM Power State!'
           end
 
-          return :not_created
+          if (power_status.include? "Powered on") && !env[:machine].ssh_info.nil?
+            return :running
+          elsif power_status.include? "Powered on"
+            return :powered_on
+          elsif power_status.include? "Powered off"
+            return :powered_off
+          elsif power_status.include? "Suspended"
+            return :suspended
+          end
+
+          return nil
         end
       end
     end

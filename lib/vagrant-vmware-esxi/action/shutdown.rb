@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -30,22 +30,12 @@ module VagrantPlugins
           else
             env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
                                  message: "Starting graceful shutdown...")
-            Net::SSH.start(config.esxi_hostname, config.esxi_username,
-              password:                   config.esxi_password,
-              port:                       config.esxi_hostport,
-              keys:                       config.local_private_keys,
-              timeout:                    20,
-              number_of_password_prompts: 0,
-              non_interactive:            true
-            ) do |ssh|
+            r = ESXiConnection.exec!(env, "vim-cmd vmsvc/power.shutdown #{machine.id}")
+            config.saved_ipaddress = nil
 
-              r = ssh.exec!("vim-cmd vmsvc/power.shutdown #{machine.id}")
-              config.saved_ipaddress = nil
-
-              if r.exitstatus != 0
-                raise Errors::ESXiError,
-                      message: "Unable to shutdown the VM:\n    #{r}"
-              end
+            if r.exitstatus != 0
+              raise Errors::ESXiError,
+                    message: "Unable to shutdown the VM:\n    #{r}"
             end
           end
         end

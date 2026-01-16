@@ -1,5 +1,5 @@
 require 'log4r'
-require 'net/ssh'
+require_relative 'esxi_connection'
 
 module VagrantPlugins
   module ESXi
@@ -33,24 +33,14 @@ module VagrantPlugins
             raise Errors::ESXiError,
                   message: 'Guest VM should have been powered off...'
           else
-            Net::SSH.start(config.esxi_hostname, config.esxi_username,
-              password:                   config.esxi_password,
-              port:                       config.esxi_hostport,
-              keys:                       config.local_private_keys,
-              timeout:                    20,
-              number_of_password_prompts: 0,
-              non_interactive:            true
-            ) do |ssh|
-
-              r = ssh.exec!("vim-cmd vmsvc/destroy #{machine.id}")
-              if r.exitstatus != 0
-                raise Errors::ESXiError,
-                      message: "Unable to destroy the VM:\n"\
-                                 "  #{r}"
-              end
-              env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
-                                   message: 'VM has been destroyed...')
+            r = ESXiConnection.exec!(env, "vim-cmd vmsvc/destroy #{machine.id}")
+            if r.exitstatus != 0
+              raise Errors::ESXiError,
+                    message: "Unable to destroy the VM:\n"\
+                               "  #{r}"
             end
+            env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                 message: 'VM has been destroyed...')
           end
         end
       end
