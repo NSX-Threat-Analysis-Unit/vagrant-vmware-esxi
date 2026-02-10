@@ -30,6 +30,9 @@ module VagrantPlugins
           machine = env[:machine]
           config = env[:machine].provider_config
 
+          # Wait for SSH to be ready before attempting network configuration
+          wait_for_ssh_ready(env)
+
           #  Number of nics configured
           if config.esxi_virtual_network.is_a? Array
             number_of_adapters = config.esxi_virtual_network.count
@@ -126,6 +129,49 @@ module VagrantPlugins
         end
 
         private
+
+        # Wait for SSH to be ready with exponential backoff
+        def wait_for_ssh_ready(env)
+          machine = env[:machine]
+          config = env[:machine].provider_config
+          max_retries = 10
+          retry_count = 0
+          base_delay = 3
+
+          @logger.info("Waiting for SSH to be ready...")
+          env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                               message: "Waiting for SSH to be ready...")
+
+          loop do
+            begin
+              # Try a simple test command
+              result = machine.communicate.test("echo 'SSH Ready'", sudo: false)
+              if result
+                @logger.info("SSH is ready!")
+                env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                     message: "SSH is ready")
+                return true
+              end
+            rescue => e
+              # Catch all SSH-related errors
+              retry_count += 1
+              if retry_count <= max_retries
+                delay = base_delay * (2 ** (retry_count - 1)) # Exponential backoff: 3, 6, 12, 24, 48...
+                delay = [delay, 60].min # Cap at 60 seconds
+                @logger.debug("SSH not ready (attempt #{retry_count}/#{max_retries}): #{e.class} - #{e.message}")
+                env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                     message: "SSH not ready, waiting #{delay}s (attempt #{retry_count}/#{max_retries})...")
+                sleep(delay)
+                next # Continue to next iteration of loop
+              else
+                @logger.error("SSH failed to become ready after #{max_retries} attempts: #{e.class} - #{e.message}")
+                env[:ui].info I18n.t('vagrant_vmware_esxi.vagrant_vmware_esxi_message',
+                                     message: "WARNING         : SSH not ready after #{max_retries} attempts, continuing anyway...")
+                return false
+              end
+            end
+          end
+        end
 
         # Disable cloud-init network configuration if cloud-init is present
         # This prevents cloud-init from overriding Vagrant's network settings on reboot
