@@ -52,7 +52,7 @@ module VagrantPlugins
               b1.use Resume
             else
               b1.use Resume
-              b1.use WaitForState, :running, 240
+              b1.use WaitForState, :running, 360
             end
           end
         end
@@ -122,7 +122,7 @@ module VagrantPlugins
               b1.use SnapshotRestore
               b1.use ReadState
               b1.use Boot
-              b1.use WaitForState, :running, 240
+              b1.use WaitForState, :running, 360
             end
           end
         end
@@ -170,7 +170,7 @@ module VagrantPlugins
           b.use CreateVM
           b.use ReadState
           b.use Boot
-          b.use Call, WaitForState, :running, 240 do |env1, b1|
+          b.use Call, WaitForState, :running, 360 do |env1, b1|
             if env1[:result] == 'True'
               b1.use SetNetworkIP
               b1.use action_provision
@@ -183,7 +183,7 @@ module VagrantPlugins
         Vagrant::Action::Builder.new.tap do |b|
           b.use SetESXiPassword
           b.use ReadState
-          b.use Call, WaitForState, :running, 240 do |env1, b1|
+          b.use Call, WaitForState, :running, 360 do |env1, b1|
             if env1[:result] == 'True'
               b1.use ReadState
               b1.use Provision
